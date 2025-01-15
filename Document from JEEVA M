@@ -1,0 +1,419 @@
+// app.config.ts
+import { ApplicationConfig } from '@angular/core';
+import { provideRouter } from '@angular/router';
+import { provideHttpClient } from '@angular/common/http';
+import { routes } from './app.routes';
+
+export const appConfig: ApplicationConfig = {
+  providers: [
+    provideRouter(routes),
+    provideHttpClient()
+  ]
+};
+
+// app.routes.ts
+import { Routes } from '@angular/router';
+import { authGuard } from './guards/auth.guard';
+import { roleGuard } from './guards/role.guard';
+
+export const routes: Routes = [
+  {
+    path: '',
+    loadComponent: () => import('./pages/home/home.component').then(m => m.HomeComponent)
+  },
+  {
+    path: 'login',
+    loadComponent: () => import('./pages/login/login.component').then(m => m.LoginComponent)
+  },
+  {
+    path: 'register',
+    loadComponent: () => import('./pages/register/register.component').then(m => m.RegisterComponent)
+  },
+  {
+    path: 'customer',
+    loadComponent: () => import('./pages/customer-home/customer-home.component')
+      .then(m => m.CustomerHomeComponent),
+    canActivate: [authGuard, roleGuard],
+    data: { role: 'customer' }
+  },
+  {
+    path: 'admin',
+    loadComponent: () => import('./pages/admin-home/admin-home.component')
+      .then(m => m.AdminHomeComponent),
+    canActivate: [authGuard, roleGuard],
+    data: { role: 'admin' }
+  },
+  { path: '**', redirectTo: '' }
+];
+
+// app.component.ts
+import { Component } from '@angular/core';
+import { RouterOutlet } from '@angular/router';
+
+@Component({
+  selector: 'app-root',
+  standalone: true,
+  imports: [RouterOutlet],
+  template: `<router-outlet></router-outlet>`
+})
+export class AppComponent {}
+
+// models/user.model.ts
+export interface User {
+  username: string;
+  email: string;
+  address: string;
+  role: string | null;
+}
+
+export interface RegisterRequest {
+  username: string;
+  email: string;
+  password: string;
+  confirmPassword: string;
+  address: string;
+}
+
+// services/auth.service.ts
+import { Injectable, signal } from '@angular/core';
+import { HttpClient } from '@angular/common/http';
+import { Observable, tap } from 'rxjs';
+import { User, RegisterRequest } from '../models/user.model';
+
+@Injectable({
+  providedIn: 'root'
+})
+export class AuthService {
+  private currentUser = signal<User | null>(null);
+
+  constructor(private http: HttpClient) {
+    const storedUser = localStorage.getItem('currentUser');
+    if (storedUser) {
+      this.currentUser.set(JSON.parse(storedUser));
+    }
+  }
+
+  login(credentials: { username: string; password: string }): Observable<User> {
+    return this.http.post<User>('/api/login', credentials).pipe(
+      tap(user => {
+        localStorage.setItem('currentUser', JSON.stringify(user));
+        this.currentUser.set(user);
+      })
+    );
+  }
+
+  register(request: RegisterRequest): Observable<User> {
+    return this.http.post<User>('/api/register', request).pipe(
+      tap(user => {
+        localStorage.setItem('currentUser', JSON.stringify(user));
+        this.currentUser.set(user);
+      })
+    );
+  }
+
+  logout(): void {
+    localStorage.removeItem('currentUser');
+    this.currentUser.set(null);
+  }
+
+  getCurrentUser() {
+    return this.currentUser;
+  }
+}
+
+// guards/auth.guard.ts
+import { inject } from '@angular/core';
+import { Router } from '@angular/router';
+import { AuthService } from '../services/auth.service';
+
+export const authGuard = () => {
+  const authService = inject(AuthService);
+  const router = inject(Router);
+
+  if (authService.getCurrentUser()()) {
+    return true;
+  }
+
+  router.navigate(['/login']);
+  return false;
+};
+
+// guards/role.guard.ts
+import { inject } from '@angular/core';
+import { Router } from '@angular/router';
+import { AuthService } from '../services/auth.service';
+
+export const roleGuard = (route: any) => {
+  const authService = inject(AuthService);
+  const router = inject(Router);
+  const user = authService.getCurrentUser()();
+  const requiredRole = route.data['role'];
+
+  if (user && user.role === requiredRole) {
+    return true;
+  }
+
+  router.navigate(['/']);
+  return false;
+};
+
+// pages/login/login.component.ts
+import { Component } from '@angular/core';
+import { CommonModule } from '@angular/common';
+import { Router } from '@angular/router';
+import { FormBuilder, FormGroup, ReactiveFormsModule, Validators } from '@angular/forms';
+import { AuthService } from '../../services/auth.service';
+
+@Component({
+  selector: 'app-login',
+  standalone: true,
+  imports: [CommonModule, ReactiveFormsModule],
+  template: `
+    <div class="container mx-auto max-w-md p-6">
+      <h2 class="text-2xl font-bold mb-6">Login</h2>
+      <form [formGroup]="loginForm" (ngSubmit)="onSubmit()" class="space-y-4">
+        <div>
+          <label class="block mb-1">Username</label>
+          <input 
+            type="text" 
+            formControlName="username"
+            class="w-full p-2 border rounded"
+          >
+          @if (loginForm.get('username')?.errors?.['required'] && loginForm.get('username')?.touched) {
+            <span class="text-red-500 text-sm">Username is required</span>
+          }
+        </div>
+
+        <div>
+          <label class="block mb-1">Password</label>
+          <input 
+            type="password" 
+            formControlName="password"
+            class="w-full p-2 border rounded"
+          >
+          @if (loginForm.get('password')?.errors?.['required'] && loginForm.get('password')?.touched) {
+            <span class="text-red-500 text-sm">Password is required</span>
+          }
+          @if (loginForm.get('password')?.errors?.['minlength']) {
+            <span class="text-red-500 text-sm">Password must be at least 6 characters</span>
+          }
+        </div>
+
+        @if (errorMessage) {
+          <div class="text-red-500">{{ errorMessage }}</div>
+        }
+
+        <button 
+          type="submit" 
+          [disabled]="loginForm.invalid || isLoading"
+          class="w-full bg-blue-500 text-white p-2 rounded disabled:bg-gray-300"
+        >
+          {{ isLoading ? 'Logging in...' : 'Login' }}
+        </button>
+      </form>
+    </div>
+  `
+})
+export class LoginComponent {
+  loginForm: FormGroup;
+  isLoading = false;
+  errorMessage = '';
+
+  constructor(
+    private fb: FormBuilder,
+    private authService: AuthService,
+    private router: Router
+  ) {
+    this.loginForm = this.fb.group({
+      username: ['', [Validators.required]],
+      password: ['', [Validators.required, Validators.minLength(6)]]
+    });
+  }
+
+  onSubmit(): void {
+    if (this.loginForm.valid) {
+      this.isLoading = true;
+      this.errorMessage = '';
+
+      this.authService.login(this.loginForm.value).subscribe({
+        next: (user) => {
+          this.isLoading = false;
+          if (user.role === 'customer') {
+            this.router.navigate(['/customer']);
+          } else if (user.role === 'admin') {
+            this.router.navigate(['/admin']);
+          }
+        },
+        error: (error) => {
+          this.isLoading = false;
+          this.errorMessage = error.message || 'Login failed. Please try again.';
+        }
+      });
+    } else {
+      Object.keys(this.loginForm.controls).forEach(key => {
+        const control = this.loginForm.get(key);
+        if (control?.invalid) {
+          control.markAsTouched();
+        }
+      });
+    }
+  }
+}
+
+// pages/register/register.component.ts
+import { Component } from '@angular/core';
+import { CommonModule } from '@angular/common';
+import { Router } from '@angular/router';
+import { FormBuilder, FormGroup, ReactiveFormsModule, Validators } from '@angular/forms';
+import { AuthService } from '../../services/auth.service';
+
+@Component({
+  selector: 'app-register',
+  standalone: true,
+  imports: [CommonModule, ReactiveFormsModule],
+  template: `
+    <div class="container mx-auto max-w-md p-6">
+      <h2 class="text-2xl font-bold mb-6">Register</h2>
+      <form [formGroup]="registerForm" (ngSubmit)="onSubmit()" class="space-y-4">
+        <div>
+          <label class="block mb-1">Username</label>
+          <input 
+            type="text" 
+            formControlName="username"
+            class="w-full p-2 border rounded"
+          >
+          @if (registerForm.get('username')?.errors?.['required'] && registerForm.get('username')?.touched) {
+            <span class="text-red-500 text-sm">Username is required</span>
+          }
+        </div>
+
+        <div>
+          <label class="block mb-1">Email</label>
+          <input 
+            type="email" 
+            formControlName="email"
+            class="w-full p-2 border rounded"
+          >
+          @if (registerForm.get('email')?.errors?.['required'] && registerForm.get('email')?.touched) {
+            <span class="text-red-500 text-sm">Email is required</span>
+          }
+          @if (registerForm.get('email')?.errors?.['email']) {
+            <span class="text-red-500 text-sm">Please enter a valid email</span>
+          }
+        </div>
+
+        <div>
+          <label class="block mb-1">Password</label>
+          <input 
+            type="password" 
+            formControlName="password"
+            class="w-full p-2 border rounded"
+          >
+          @if (registerForm.get('password')?.errors?.['required'] && registerForm.get('password')?.touched) {
+            <span class="text-red-500 text-sm">Password is required</span>
+          }
+          @if (registerForm.get('password')?.errors?.['minlength']) {
+            <span class="text-red-500 text-sm">Password must be at least 6 characters</span>
+          }
+        </div>
+
+        <div>
+          <label class="block mb-1">Confirm Password</label>
+          <input 
+            type="password" 
+            formControlName="confirmPassword"
+            class="w-full p-2 border rounded"
+          >
+          @if (registerForm.get('confirmPassword')?.errors?.['required'] && registerForm.get('confirmPassword')?.touched) {
+            <span class="text-red-500 text-sm">Please confirm your password</span>
+          }
+          @if (registerForm.errors?.['passwordMismatch']) {
+            <span class="text-red-500 text-sm">Passwords do not match</span>
+          }
+        </div>
+
+        <div>
+          <label class="block mb-1">Address</label>
+          <textarea 
+            formControlName="address"
+            class="w-full p-2 border rounded"
+          ></textarea>
+          @if (registerForm.get('address')?.errors?.['required'] && registerForm.get('address')?.touched) {
+            <span class="text-red-500 text-sm">Address is required</span>
+          }
+        </div>
+
+        @if (errorMessage) {
+          <div class="text-red-500">{{ errorMessage }}</div>
+        }
+
+        <button 
+          type="submit" 
+          [disabled]="registerForm.invalid || isLoading"
+          class="w-full bg-blue-500 text-white p-2 rounded disabled:bg-gray-300"
+        >
+          {{ isLoading ? 'Registering...' : 'Register' }}
+        </button>
+      </form>
+    </div>
+  `
+})
+export class RegisterComponent {
+  registerForm: FormGroup;
+  isLoading = false;
+  errorMessage = '';
+
+  constructor(
+    private fb: FormBuilder,
+    private authService: AuthService,
+    private router: Router
+  ) {
+    this.registerForm = this.fb.group({
+      username: ['', [Validators.required]],
+      email: ['', [Validators.required, Validators.email]],
+      password: ['', [Validators.required, Validators.minLength(6)]],
+      confirmPassword: ['', [Validators.required]],
+      address: ['', [Validators.required]]
+    }, { validators: this.passwordMatchValidator });
+  }
+
+  passwordMatchValidator(form: FormGroup) {
+    const password = form.get('password')?.value;
+    const confirmPassword = form.get('confirmPassword')?.value;
+
+    if (password === confirmPassword) {
+      return null;
+    }
+
+    return { passwordMismatch: true };
+  }
+
+  onSubmit(): void {
+    if (this.registerForm.valid) {
+      this.isLoading = true;
+      this.errorMessage = '';
+
+      this.authService.register(this.registerForm.value).subscribe({
+        next: (user) => {
+          this.isLoading = false;
+          if (user.role === 'customer') {
+            this.router.navigate(['/customer']);
+          } else if (user.role === 'admin') {
+            this.router.navigate(['/admin']);
+          }
+        },
+        error: (error) => {
+          this.isLoading = false;
+          this.errorMessage = error.message || 'Registration failed. Please try again.';
+        }
+      });
+    } else {
+      Object.keys(this.registerForm.controls).forEach(key => {
+        const control = this.registerForm.get(key);
+        if (control?.invalid) {
+          control.markAsTouched();
+        }
+      });
+    }
+  }
+}
